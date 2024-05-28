@@ -1,50 +1,57 @@
-import requests, time, math
+#!/usr/bin/env python3
 
-api_token = '2003733580:AAH7tZzMCvsqM6OaMmUPdBf1qpi54IouMnU'
-chat_id = "-4221805882"
+import csv
+import os
+import sys
+from datetime import datetime
 
-api_url = 'https://api.telegram.org/bot' + api_token
+import requests
+import telegram
+from apscheduler.schedulers.blocking import BlockingScheduler
 
-def main():
-  wallets = []
-  while True:
-    res = requests.get("https://toncenter.com/api/v3/jetton/transfers?direction=both&limit=128&offset=0&sort=desc")
-    if res.status_code == 200:
-      for tx in res.json()["jetton_transfers"]:
-        wallet = tx["source"]
-        if wallet not in wallets:
-          res = requests.get("https://toncenter.com/api/v3/wallet?address=" + wallet)
-          if res.status_code == 200:
-            balance = int(res.json()["balance"])
-            if balance > 5000000000 and balance < 1000000000000:
-              res = requests.get("https://tonapi.io/v2/accounts/" + wallet + "/jettons?currencies=usd")
-              if res.status_code == 200:
-                try:
-                  json = res.json()
-                  t_worth = (balance / 1000000000) * 5.50
-                  j_worth = 0
-                  for j in json["balances"]:
-                    j_worth += (int(j["balance"]) / math.pow(10, j["jetton"]["decimals"])) * j["price"]["prices"]["USD"]
-                  worth = round(t_worth + j_worth, 2)
-                  if worth > 125:
-                    text = "`"+wallet+"`\n💰 $"+worth, "USD"
-                    res = requests.get(api_url + '/sendMessage?parse_mode=html&disable_web_page_preview=true&chat_id=' + chat_id + '&text=' + text)
-                    print("s", res.status_code, res.json())
-                    # print("$" + str(round(worth, 2)), "USD :", wallet)
-                except Exception as e:
-                  print(e)
-              else:
-                print(res.status_code)
-          elif res.status_code == 409:
-            pass
-          else:
-            print(res.status_code)
-          time.sleep(3)
-        wallets.append(wallet)
-    else:
-      print(res.status_code)
-    time.sleep(3)
 
-if __name__ == "__main__":
-  main()
+def get_btc_price(currency, exchange):
+    url = "https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=" + currency + "&e=" + exchange
+    response = requests.get(url)
+    return response.json()[currency]
 
+def send_price_telegram(currency, exchange, price):
+    bot = telegram.Bot(token=os.environ.get('2003733580:AAH7tZzMCvsqM6OaMmUPdBf1qpi54IouMnU'))
+    text = text="BTC/" + currency + " from " + exchange + ": " + currency + " " + str(price)
+    bot.send_message(chat_id=os.environ.get('-4221805882'), text=text)
+
+def bot():
+    btc_usd_price = get_btc_price('USD', 'Bitfinex')
+    btc_krw_price = get_btc_price('KRW', 'Bithumb')
+
+    with open(sys.argv[1], mode='a') as csv_file:
+        price_writer = csv.writer(csv_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+        now = datetime.now()
+        date_time = now.strftime("%Y-%m-%d-%H:%M")
+
+        price_writer.writerow([date_time, btc_usd_price, btc_krw_price])
+
+    # send_price_telegram('USD', 'Bitfinex', btc_usd_price)
+    send_price_telegram('KRW', 'Bithumb', btc_krw_price)
+
+if __name__ == '__main__':
+    if not os.environ.get('2003733580:AAH7tZzMCvsqM6OaMmUPdBf1qpi54IouMnU') or not os.environ.get('-4221805882'):
+        exit("Please check that TELEGRAM_BOT_API_KEY and TELEGRAM_CHAT_ID env variables are set")
+
+    if len(sys.argv) ==1 :
+        exit("Please specify a CSV output file.")
+
+    if not os.path.exists(sys.argv[1]):
+        with open(sys.argv[1], mode='w') as csv_file:
+            csv_file.write("Date,Bitfinex-BTC-USD,Bithumb-BTC-KRW\n")
+
+    scheduler = BlockingScheduler()
+    scheduler.add_job(bot, 'interval', seconds=60)
+
+    print('Press Ctrl+C to exit')
+
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        pass
